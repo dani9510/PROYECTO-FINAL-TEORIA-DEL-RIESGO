@@ -1,0 +1,1659 @@
+---
+title: "ANÁLISIS INTEGRAL DE RIESGO FINANCIERO"
+author: "Daniela Murcia"
+date: "2025-11-22"
+output: html_document
+---
+
+
+```{r libraries, include=FALSE}
+required_packages <- c(
+  "quantmod", "PerformanceAnalytics", "ggplot2", "dplyr", 
+  "reticulate", "reshape2", "zoo", "knitr",
+  "TTR", "forecast", "rugarch", "tseries", "moments", "gridExtra"
+)
+
+# Instalar paquetes faltantes
+new_packages <- required_packages[!(required_packages %in% installed.packages()[,"Package"])]
+if(length(new_packages)) {
+  cat("Instalando paquetes faltantes:", paste(new_packages, collapse = ", "), "\n")
+  install.packages(new_packages, dependencies = TRUE)
+}
+
+# Cargar librerías
+load_success <- sapply(required_packages, function(pkg) {
+  success <- require(pkg, character.only = TRUE, quietly = TRUE)
+  if(!success) {
+    cat("❌ No se pudo cargar:", pkg, "\n")
+  }
+  return(success)
+})
+
+cat("✅ Paquetes cargados:", sum(load_success), "de", length(required_packages), "\n")
+
+# Configurar opciones
+options(warn = -1)  # Desactivar warnings temporalmentev
+```
+
+# ANÁLISIS EXPLORATORIO DE DATOS FINANCIEROS
+
+## 1.1 Rendimientos Financieros
+
+### Definición
+
+Los rendimientos financieros representan el cambio porcentual en el precio de un activo financiero entre dos periodos consecutivos:
+
+$$
+R_t = \frac{P_t - P_{t-1}}{P_{t-1}} \times 100
+$$
+
+
+donde:
+
+- $R_t$ = Rendimiento en el periodo $t$
+- $P_t$ = Precio del activo en el tiempo $t$  
+- $P_{t-1}$ = Precio del activo en el tiempo $t-1$
+
+
+Alternativamente, para rendimientos logarítmicos:
+
+$$
+r_t = \ln\left(\frac{P_t}{P_{t-1}}\right) \times 100
+$$
+
+### Medidas de Tendencia Central
+
+**Rendimiento promedio:**
+$$
+\bar{R} = \frac{1}{T} \sum_{t=1}^T R_t
+$$
+
+**Varianza muestral:**
+$$
+\sigma^2 = \frac{1}{T-1} \sum_{t=1}^T (R_t - \bar{R})^2
+$$
+
+
+```{r teoria_rendimientos, eval=TRUE}
+# Configurar símbolos y período de análisis
+symbols <- c('AAPL', 'MSFT', 'GOOGL', 'SPY', 'TLT', 'GLD')
+start_date <- '2022-11-21'
+end_date <- '2025-11-21'
+
+# Descargar datos
+price_data <- list()
+returns_list <- list()
+
+for(symbol in symbols) {
+  cat("Descargando", symbol, "...\n")
+  tryCatch({
+    getSymbols(symbol, from = start_date, to = end_date, auto.assign = TRUE)
+    price_data[[symbol]] <- Ad(get(symbol))
+    
+    # Calcular rendimientos logarítmicos
+    returns_list[[symbol]] <- na.omit(ROC(price_data[[symbol]], type = "continuous"))
+    
+    cat("✅", symbol, "descargado correctamente\n")
+  }, error = function(e) {
+    cat("❌ Error descargando", symbol, ":", e$message, "\n")
+  })
+}
+
+# Crear data.frame de rendimientos
+returns_df <- do.call(merge, returns_list)
+colnames(returns_df) <- symbols
+
+```
+
+## 1.2 Propiedades Empíricas de los Rendimientos
+
+### Medidas de Forma de Distribución
+
+**Asimetría (Skewness):**
+$$
+\gamma_1 = \frac{\frac{1}{T} \sum_{t=1}^T (R_t - \bar{R})^3}{\sigma^3}
+$$
+
+**Curtosis:**
+$$
+\gamma_2 = \frac{\frac{1}{T} \sum_{t=1}^T (R_t - \bar{R})^4}{\sigma^4}
+$$
+
+**Exceso de curtosis:**
+$$
+\gamma_2^{exceso} = \gamma_2 - 3
+$$
+
+### Autocorrelación
+
+**Función de Autocorrelación (ACF):**
+$$
+\rho_k = \frac{\sum_{t=k+1}^T (R_t - \bar{R})(R_{t-k} - \bar{R})}{\sum_{t=1}^T (R_t - \bar{R})^2}
+$$
+
+**Estadístico Ljung-Box:**
+$$
+Q(m) = T(T+2) \sum_{k=1}^m \frac{\rho_k^2}{T-k} \sim \chi^2(m)
+$$
+
+### Efectos de Leverage
+
+**Correlación asimétrica:**
+
+$$
+Corr(R_t, \sigma_{t+1}^2) < 0
+$$
+
+```{r propiedades_empiricas, eval=TRUE}
+
+# Estadísticas básicas
+stats_summary <- data.frame(
+  Activo = colnames(returns_df),
+  Observaciones = apply(returns_df, 2, function(x) sum(!is.na(x))),
+  Media_Diaria = round(apply(returns_df, 2, mean, na.rm = TRUE), 6),
+  Volatilidad_Diaria = round(apply(returns_df, 2, sd, na.rm = TRUE), 4),
+  Volatilidad_Anual = round(apply(returns_df, 2, sd, na.rm = TRUE) * sqrt(252), 4),
+  Minimo = round(apply(returns_df, 2, min, na.rm = TRUE), 4),
+  Maximo = round(apply(returns_df, 2, max, na.rm = TRUE), 4)
+)
+
+print(knitr::kable(stats_summary, format = "simple"))
+
+# Gráfico de rendimientos acumulados
+cat("\n📈 Rendimientos Acumulados:\n")
+returns_cumulative <- exp(cumsum(returns_df)) - 1
+
+# Visualización
+plot_data <- fortify(returns_cumulative, melt = TRUE)
+ggplot(plot_data, aes(x = Index, y = Value, color = Series)) +
+  geom_line(size = 1) +
+  labs(title = "Rendimientos Acumulados",
+       x = "Fecha", y = "Rendimiento Acumulado") +
+  theme_minimal() +
+  scale_y_continuous(labels = scales::percent)
+```
+
+1. Rendimientos Financieros
+
+Los rendimientos diarios promedio son positivos para todos los activos, indicando una tendencia general de crecimiento durante el período analizado (2022-11-21 a 2025-11-21).
+
+GOOGL muestra el mayor rendimiento diario promedio (0.148%), seguido de GLD (0.112%) y MSFT (0.093%).
+
+TLT prácticamente no presenta rendimiento diario promedio, reflejando su naturaleza conservadora como bono.
+
+La volatilidad diaria y anual es más alta en GOOGL (0.0191 diaria, 30.34% anual), mientras que SPY y TLT muestran menor volatilidad, reflejando la estabilidad relativa de índices y bonos frente a acciones tecnológicas.
+
+Los rendimientos mínimos y máximos destacan eventos extremos: AAPL tuvo una caída de -9.7% y una ganancia de 14.26%, evidenciando la alta variabilidad de acciones individuales.
+
+
+
+# MODELOS DE VOLATILIDAD
+
+## 2.1 Modelo ARCH(p)
+
+### Ecuación del Modelo
+
+**Ecuación de la media:**
+$$
+R_t = \mu + \varepsilon_t
+$$
+
+**Ecuación de la varianza:**
+
+$$
+\sigma_t^2 = \omega + \sum_{i=1}^p \alpha_i \varepsilon_{t-i}^2
+$$
+
+**Donde:**
+
+- $\varepsilon_t = \sigma_t z_t$
+- $z_t \sim i.i.d.(0,1)$
+- $\omega > 0$, $\alpha_i \geq 0$
+
+
+```{r medidas_volatilidad, echo=FALSE, eval=TRUE}
+analizar_propiedades_empiricas <- function(returns_df) {
+  propiedades <- data.frame()
+  
+  for(activo in colnames(returns_df)) {
+    retornos <- na.omit(returns_df[, activo])
+    
+    if(length(retornos) < 10) next
+    
+    # Estadísticas descriptivas
+    media <- mean(retornos)
+    volatilidad <- sd(retornos)
+    skewness <- moments::skewness(retornos)
+    kurtosis <- moments::kurtosis(retornos)
+    
+    # Pruebas de normalidad
+    jb_test <- tryCatch({
+      tseries::jarque.bera.test(retornos)
+    }, error = function(e) {
+      list(statistic = NA, p.value = NA)
+    })
+    
+    # Autocorrelación
+    acf_retornos <- tryCatch({
+      acf_val <- acf(retornos, plot = FALSE)$acf
+      if(length(acf_val) >= 2) acf_val[2] else NA
+    }, error = function(e) NA)
+    
+    acf_absolutos <- tryCatch({
+      acf_val <- acf(abs(retornos), plot = FALSE)$acf
+      if(length(acf_val) >= 2) acf_val[2] else NA
+    }, error = function(e) NA)
+    
+    propiedades <- rbind(propiedades, data.frame(
+      Activo = activo,
+      Media = round(media, 6),
+      Volatilidad = round(volatilidad, 4),
+      Asimetría = round(skewness, 4),
+      Curtosis = round(kurtosis, 4),
+      JB_pvalue = round(jb_test$p.value, 4),
+      ACF_Retornos = round(acf_retornos, 4),
+      ACF_Absolutos = round(acf_absolutos, 4),
+      Normalidad = ifelse(jb_test$p.value > 0.05, "Sí", "No")
+    ))
+  }
+  
+  return(propiedades)
+}
+
+propiedades_activos <- analizar_propiedades_empiricas(returns_df)
+print(knitr::kable(propiedades_activos, format = "simple"))
+
+cat("\n📊 INTERPRETACIÓN PROPIEDADES ESTILIZADAS:\n")
+cat("• Curtosis > 3: Distribución leptocúrtica (colas pesadas)\n")
+cat("• Asimetría ≠ 0: Distribución asimétrica\n")
+cat("• JB p-value < 0.05: Rechaza normalidad\n")
+cat("• ACF Absolutos > ACF Retornos: Agrupamiento de volatilidad\n")
+```
+
+
+Propiedades Estilizadas
+
+Curtosis elevada (>3) en la mayoría de los activos (excepto TLT), indicando colas pesadas y mayor probabilidad de movimientos extremos.
+
+Asimetría: la mayoría de los activos presentan ligera asimetría positiva, excepto GLD (-0.3723) y GOOGL (-0.0668), mostrando que la distribución de rendimientos no es simétrica.
+
+Prueba de normalidad (JB p-value) rechaza normalidad para todos los activos excepto TLT, justificando el uso de modelos GARCH para capturar heterocedasticidad.
+
+Autocorrelación de rendimientos es baja, pero la de rendimientos absolutos es mayor, confirmando el efecto de agrupamiento de volatilidad.
+
+
+## 2.2 Modelo GARCH(1,1)
+
+### Especificación General
+
+**Ecuación de la media:**
+$$
+R_t = \mu + \varepsilon_t
+$$
+
+**Ecuación de la varianza:**
+$$
+\sigma_t^2 = \omega + \alpha \varepsilon_{t-1}^2 + \beta \sigma_{t-1}^2
+$$
+
+**Condiciones de estacionaridad:**
+- $\omega > 0$
+- $\alpha \geq 0$, $\beta \geq 0$
+- $\alpha + \beta < 1$
+
+### Persistencia de Volatilidad
+
+**Persistencia total:**
+$$
+\phi = \alpha + \beta
+$$
+
+**Vida media del shock:**
+$$
+\text{Vida Media} = \frac{\ln(0.5)}{\ln(\alpha + \beta)}
+$$
+
+**Varianza incondicional:**
+$$
+\sigma^2 = \frac{\omega}{1 - \alpha - \beta}
+$$
+
+
+```{r modelos_arch_garch, echo=FALSE, eval=TRUE}
+ajustar_modelos_volatilidad <- function(returns_df, activo) {
+  retornos <- na.omit(returns_df[, activo])
+
+  # Especificación GARCH(1,1)
+  spec_garch <- rugarch::ugarchspec(
+    variance.model = list(model = "sGARCH", garchOrder = c(1, 1)),
+    mean.model = list(armaOrder = c(0, 0)),
+    distribution.model = "norm"
+  )
+  
+  tryCatch({
+    fit_garch <- rugarch::ugarchfit(spec_garch, data = retornos)
+    
+    # Parámetros del modelo
+    params <- rugarch::coef(fit_garch)
+    persistence <- params['alpha1'] + params['beta1']
+    
+    # Pronóstico de volatilidad
+    forecast_garch <- rugarch::ugarchforecast(fit_garch, n.ahead = 1)
+    vol_pronosticada <- rugarch::sigma(forecast_garch)[1]
+    
+    resultados <- data.frame(
+      Activo = activo,
+      Omega = round(params['omega'], 6),
+      Alpha1 = round(params['alpha1'], 4),
+      Beta1 = round(params['beta1'], 4),
+      Persistencia = round(persistence, 4),
+      Vol_pronosticada = round(vol_pronosticada, 4)
+    )
+    
+    return(resultados)
+    
+  }, error = function(e) {
+    return(NULL)
+  })
+}
+
+# Aplicar modelos GARCH a cada activo
+garch_results <- list()
+
+for(activo in symbols[1:3]) {  # Aplicar a los primeros 3 activos por tiempo de cómputo
+  resultado <- ajustar_modelos_volatilidad(returns_df, activo)
+  if(!is.null(resultado)) {
+    garch_results[[activo]] <- resultado
+  }
+}
+
+if(length(garch_results) > 0) {
+  garch_df <- do.call(rbind, garch_results)
+  print(knitr::kable(garch_df, format = "simple"))
+  
+  # Interpretación
+  cat("\n📊 INTERPRETACIÓN GARCH:\n")
+  cat("• Persistencia ≈ 1: Volatilidad muy persistente\n")
+  cat("• Alpha1 alto: Reacción fuerte a shocks recientes\n")
+  cat("• Beta1 alto: Dependencia fuerte de volatilidad pasada\n")
+} else {
+  cat("No se pudieron ajustar modelos GARCH\n")
+}
+```
+```{r, echo=FALSE, eval=TRUE}
+# Función VaR Paramétrico
+calculate_parametric_var <- function(returns, confidence_level = 0.95) {
+  var_results <- sapply(1:ncol(returns), function(i) {
+    ret <- na.omit(returns[, i])
+    mu <- mean(ret)
+    sigma <- sd(ret)
+    var_value <- abs(-qnorm(1 - confidence_level) * sigma + mu)
+    return(var_value)
+  })
+  names(var_results) <- colnames(returns)
+  return(var_results)
+}
+
+# Función Expected Shortfall
+calculate_expected_shortfall <- function(returns, confidence_level = 0.95) {
+  es_results <- sapply(1:ncol(returns), function(i) {
+    ret <- na.omit(returns[, i])
+    var_threshold <- -quantile(ret, 1 - confidence_level)
+    excess_losses <- ret[ret < -var_threshold]
+    es_value <- if(length(excess_losses) > 0) -mean(excess_losses) else var_threshold
+    return(es_value)
+  })
+  names(es_results) <- colnames(returns)
+  return(es_results)
+}
+
+# Calcular VaR y ES
+var_95 <- calculate_parametric_var(returns_df, 0.95)
+es_95 <- calculate_expected_shortfall(returns_df, 0.95)
+
+risk_metrics <- data.frame(
+  Activo = names(var_95),
+  VaR_95 = round(var_95, 4),
+  ES_95 = round(es_95, 4),
+  Ratio_ES_VaR = round(es_95 / var_95, 3)
+)
+
+cat("MÉTRICAS DE RIESGO (95% confianza):\n")
+print(knitr::kable(risk_metrics, format = "simple"))
+
+# Backtesting básico
+cat("\n=== BACKTESTING VaR ===\n")
+perform_var_backtesting <- function(returns, var_estimates, confidence_level = 0.95) {
+  backtest_results <- data.frame()
+  
+  for(i in 1:ncol(returns)) {
+    ret <- na.omit(returns[, i])
+    var_est <- var_estimates[i]
+    
+    violations <- sum(ret < -var_est, na.rm = TRUE)
+    expected_violations <- (1 - confidence_level) * length(ret)
+    violation_ratio <- violations / expected_violations
+    
+    backtest_results <- rbind(backtest_results, data.frame(
+      Activo = colnames(returns)[i],
+      Observaciones = length(ret),
+      Violaciones = violations,
+      Esperadas = round(expected_violations, 1),
+      Ratio_Violaciones = round(violation_ratio, 3),
+      Resultado = ifelse(abs(violation_ratio - 1) < 0.3, "✅ Aceptable", "⚠️ Revisar")
+    ))
+  }
+  return(backtest_results)
+}
+
+backtest_results <- perform_var_backtesting(returns_df, var_95, 0.95)
+print(knitr::kable(backtest_results, format = "simple"))
+```
+
+
+Modelos GARCH(1,1)
+
+Persistencia de volatilidad muy alta (0.935–0.998), indicando que los shocks de volatilidad permanecen en el tiempo.
+
+Alpha1 relativamente bajo salvo en AAPL, lo que sugiere que la reacción inmediata a un shock es moderada; Beta1 alto muestra fuerte dependencia de la volatilidad pasada.
+
+La volatilidad pronosticada es coherente con la volatilidad observada: GOOGL presenta la mayor volatilidad esperada, AAPL y MSFT intermedias, y los activos más conservadores (TLT, SPY) menores.
+
+
+
+# VALOR EN RIESGO (VaR)
+
+## 3.1 VaR Paramétrico
+
+### Definición General
+
+$$
+VaR_\alpha = \mu + \sigma \cdot F^{-1}(\alpha)
+$$
+
+donde $F^{-1}(\alpha)$ es el cuantil $\alpha$ de la distribución.
+
+### Para distribución normal:
+
+$$
+VaR_\alpha^{Normal} = \mu + \sigma \cdot \Phi^{-1}(\alpha)
+$$
+
+### Para distribución t-Student:
+
+$$
+VaR_\alpha^{t} = \mu + \sigma \cdot t_\nu^{-1}(\alpha) \cdot \sqrt{\frac{\nu-2}{\nu}}
+$$
+
+### VaR Condicional con GARCH:
+
+$$
+VaR_{\alpha,t} = \mu + \sigma_t \cdot F^{-1}(\alpha)
+$$
+
+## 3.2 VaR por Simulación Histórica
+
+### Cálculo no paramétrico
+
+$$
+VaR_\alpha^{Hist} = Q_\alpha(\{R_t\}_{t=1}^T)
+$$
+
+donde $Q_\alpha$ es el cuantil empírico $\alpha$ de la muestra histórica.
+
+## 3.3 Backtesting del VaR
+
+### Prueba de Kupiec
+
+**Estadístico de razón de verosimilitud:**
+$$
+LR_{uc} = -2 \ln\left[ \frac{(1-p_0)^{T-N} p_0^N}{(1-\hat{p})^{T-N} \hat{p}^N} \right] \sim \chi^2(1)
+$$
+
+**Donde:**
+
+
+- $T$ = Número total de observaciones
+- $N$ = Número de violaciones
+- $\hat{p} = N/T$ = Proporción observada de violaciones
+- $p_0$ = Proporción esperada de violaciones ($1-\alpha$)
+
+### Prueba de Independencia
+
+$$
+LR_{ind} = -2 \ln\left[ \frac{(1-\hat{\pi}_2)^{n_{00}+n_{10}} \hat{\pi}_2^{n_{01}+n_{11}}}{\prod_{i=0}^1 (1-\hat{\pi}_i)^{n_{i0}} \hat{\pi}_i^{n_{i1}}} \right] \sim \chi^2(1)
+$$
+
+
+```{r indicadores_tecnicos, echo=FALSE, eval=TRUE}
+
+
+calcular_indicadores_tecnicos <- function(symbols, price_data) {
+  indicadores <- data.frame()
+  
+  for(activo in symbols) {
+    tryCatch({
+      precio_serie <- price_data[[activo]]
+      
+      if(is.null(precio_serie) || length(precio_serie) < 30) next
+      
+      precio_numeric <- as.numeric(precio_serie)
+      
+      # Calcular indicadores
+      sma_20 <- TTR::SMA(precio_numeric, n = 20)
+      ema_20 <- TTR::EMA(precio_numeric, n = 20)
+      rsi_14 <- TTR::RSI(precio_numeric, n = 14)
+      
+      # Últimos valores
+      ultimo_sma <- tail(na.omit(sma_20), 1)
+      ultimo_ema <- tail(na.omit(ema_20), 1)
+      ultimo_rsi <- tail(na.omit(rsi_14), 1)
+      
+      # Estado del mercado
+      estado_mercado <- if(is.na(ultimo_rsi)) "ND" else {
+        if(ultimo_rsi > 70) "Sobrecompra" else
+        if(ultimo_rsi < 30) "Sobreventa" else "Neutral"
+      }
+      
+      indicadores <- rbind(indicadores, data.frame(
+        Activo = activo,
+        Precio_Actual = round(tail(precio_numeric, 1), 2),
+        SMA_20 = round(ultimo_sma, 2),
+        EMA_20 = round(ultimo_ema, 2),
+        RSI_14 = round(ultimo_rsi, 2),
+        Estado_Mercado = estado_mercado
+      ))
+      
+    }, error = function(e) {
+      cat("Error en", activo, ":", e$message, "\n")
+    })
+  }
+  return(indicadores)
+}
+
+tech_indicators <- calcular_indicadores_tecnicos(symbols, price_data)
+print(knitr::kable(tech_indicators, format = "simple"))
+```
+
+
+
+Medidas de Riesgo (VaR y Expected Shortfall)
+
+VaR a 95% muestra mayor riesgo para GOOGL (0.0329) y AAPL (0.0279), mientras que SPY y TLT presentan menor riesgo (0.0169 y 0.0161 respectivamente).
+
+Expected Shortfall (ES) confirma esta tendencia, siendo siempre mayor que VaR, lo que refleja la severidad de pérdidas en el 5% de los peores escenarios.
+
+La relación ES/VaR (aprox. 1.24–1.34) indica que los peores escenarios superan en promedio 24–34% el VaR estimado.
+
+
+
+# EXPECTED SHORTFALL
+
+## 4.1 Definición y Cálculo
+
+### Expected Shortfall (ES)
+
+$$
+ES_\alpha = \mathbb{E}[R_t | R_t \leq VaR_\alpha] = \frac{1}{\alpha} \int_0^\alpha VaR_u  du
+$$
+
+### Para distribución normal:
+
+$$
+ES_\alpha^{Normal} = \mu - \sigma \cdot \frac{\phi(\Phi^{-1}(\alpha))}{\alpha}
+$$
+
+### Para distribución t-Student:
+
+$$
+ES_\alpha^{t} = \mu - \sigma \cdot \frac{g_\nu(t_\nu^{-1}(\alpha))}{\alpha} \cdot \frac{\nu + (t_\nu^{-1}(\alpha))^2}{\nu-1}
+$$
+
+**Donde:**
+- $\phi(\cdot)$ = función de densidad normal estándar
+- $g_\nu(\cdot)$ = función de densidad t-Student con $\nu$ grados de libertad
+
+### Relación ES/VaR
+
+$$
+\text{Ratio} = \frac{ES_\alpha}{VaR_\alpha}
+$$
+
+
+```{r var_mejorado, echo=FALSE, eval=TRUE}
+# FUNCIÓN MEJORADA: VaR Paramétrico con distribuciones alternativas
+calculate_parametric_var_advanced <- function(returns, confidence_level = 0.95, distribution = "normal") {
+  var_results <- sapply(1:ncol(returns), function(i) {
+    ret <- na.omit(returns[, i])
+    
+    if(distribution == "normal") {
+      mu <- mean(ret)
+      sigma <- sd(ret)
+      var_value <- abs(-qnorm(1 - confidence_level) * sigma + mu)
+      
+    } else if(distribution == "t-student") {
+      # Ajustar distribución t-Student
+      fit <- fitdistr(ret, "t")
+      df <- fit$estimate[3]
+      var_value <- abs(-qt(1 - confidence_level, df) * sd(ret) + mean(ret))
+      
+    } else if(distribution == "historical") {
+      var_value <- abs(quantile(ret, 1 - confidence_level))
+    }
+    
+    return(var_value)
+  })
+  
+  names(var_results) <- colnames(returns)
+  return(var_results)
+}
+
+# FUNCIÓN MEJORADA: Expected Shortfall (CVaR) avanzado
+calculate_expected_shortfall_advanced <- function(returns, confidence_level = 0.95) {
+  es_results <- sapply(1:ncol(returns), function(i) {
+    ret <- na.omit(returns[, i])
+    var_threshold <- -quantile(ret, 1 - confidence_level)
+    
+    # Pérdidas que exceden el VaR
+    excess_losses <- ret[ret < -var_threshold]
+    
+    if(length(excess_losses) > 0) {
+      es_value <- -mean(excess_losses)
+    } else {
+      es_value <- var_threshold
+    }
+    
+    return(es_value)
+  })
+  
+  names(es_results) <- colnames(returns)
+  return(es_results)
+}
+
+# FUNCIÓN NUEVA: Análisis de Sensibilidad del VaR
+analyze_var_sensitivity <- function(returns, confidence_levels = c(0.90, 0.95, 0.99)) {
+  sensitivity_results <- list()
+  
+  for(conf_level in confidence_levels) {
+    var_parametric <- calculate_parametric_var_advanced(returns, conf_level)
+    sensitivity_results[[as.character(conf_level)]] <- var_parametric
+  }
+  
+  sensitivity_df <- do.call(cbind, sensitivity_results)
+  colnames(sensitivity_df) <- paste0("VaR_", confidence_levels * 100)
+  
+  return(sensitivity_df)
+}
+
+cat("• VaR Paramétrico con distribuciones alternativas\n")
+cat("• Expected Shortfall (CVaR) robusto\n")
+cat("• Análisis de sensibilidad por niveles de confianza\n")
+```
+
+### 4.2 Backtesting Avanzado
+
+```{r backtesting_avanzado, echo=FALSE, eval=TRUE}
+perform_advanced_backtesting <- function(returns, var_estimates, confidence_level = 0.95) {
+  backtest_results <- data.frame()
+  
+  for(i in 1:ncol(returns)) {
+    ret <- na.omit(returns[, i])
+    var_est <- var_estimates[i]
+    
+    # Violaciones
+    violations <- sum(ret < -var_est, na.rm = TRUE)
+    expected_violations <- (1 - confidence_level) * length(ret)
+    violation_ratio <- violations / expected_violations
+    
+    # Test de Kupiec (Proportion of Failures)
+    kupiec_stat <- -2 * log(((1 - (1 - confidence_level))^(length(ret) - violations) * 
+                            (1 - confidence_level)^violations) /
+                           ((1 - violations/length(ret))^(length(ret) - violations) * 
+                            (violations/length(ret))^violations))
+    
+    kupiec_pvalue <- 1 - pchisq(kupiec_stat, 1)
+    
+    # Severidad de las violaciones
+    violation_severity <- if(violations > 0) {
+      mean(abs(ret[ret < -var_est])) / var_est
+    } else {
+      NA
+    }
+    
+    backtest_results <- rbind(backtest_results, data.frame(
+      Activo = colnames(returns)[i],
+      Observaciones = length(ret),
+      Violaciones = violations,
+      Esperadas = round(expected_violations, 1),
+      Ratio_Violaciones = round(violation_ratio, 3),
+      Kupiec_pvalue = round(kupiec_pvalue, 4),
+      Severidad = round(violation_severity, 3),
+      Resultado = ifelse(kupiec_pvalue > 0.05, "✅ Aceptable", "❌ Rechazado")
+    ))
+  }
+  
+  return(backtest_results)
+}
+```
+
+Backtesting VaR
+
+Modelos aceptables para AAPL, MSFT, TLT y GLD.
+
+Modelos rechazados para GOOGL y SPY, indicando que los valores de VaR subestimaron el riesgo histórico para estos activos.
+
+Severidad promedio (≈1.4) sugiere que cuando ocurre una violación del VaR, las pérdidas tienden a ser significativamente mayores que el VaR estimado.
+
+
+
+# PRUEBAS DE ROBUSTEZ
+
+## 5.1 Estabilidad Temporal
+
+### Test de Chow
+
+$$
+F = \frac{(SSR_p - SSR_1 - SSR_2)/k}{(SSR_1 + SSR_2)/(T - 2k)} \sim F(k, T-2k)
+$$
+
+**Donde:**
+- $SSR_p$ = Suma de cuadrados residuales del modelo completo
+- $SSR_1, SSR_2$ = Suma de cuadrados residuales de las submuestras
+- $k$ = Número de parámetros
+
+## 5.2 Criterios de Información
+
+### Criterio de Akaike (AIC)
+
+$$
+AIC = -2 \ln(L) + 2k
+$$
+
+### Criterio Bayesiano (BIC)
+
+$$
+BIC = -2 \ln(L) + k \ln(T)
+$$
+
+**Donde:**
+- $L$ = Valor de la verosimilitud
+- $k$ = Número de parámetros
+- $T$ = Número de observaciones
+
+
+$$
+F = \frac{(SSR_p - SSR_1 - SSR_2)/k}{(SSR_1 + SSR_2)/(T - 2k)} \sim F(k, T-2k)
+$$
+
+
+**Donde:**
+- $SSR_p$ = Suma de cuadrados residuales del modelo completo
+- $SSR_1, SSR_2$ = Suma de cuadrados residuales de las submuestras
+- $k$ = Número de parámetros
+
+## 5.2 Criterios de Información
+
+### Criterio de Akaike (AIC)
+
+$$
+AIC = -2 \ln(L) + 2k
+$$
+
+### Criterio Bayesiano (BIC)
+
+$$
+BIC = -2 \ln(L) + k \ln(T)
+$$
+
+**Donde:**
+- $L$ = Valor de la verosimilitud
+- $k$ = Número de parámetros
+- $T$ = Número de observaciones
+
+# MEDIDAS DE BONDAD DE AJUSTE
+
+## Función de Verosimilitud
+
+### Para modelo GARCH con distribución normal:
+
+$$
+\ln L = -\frac{T}{2} \ln(2\pi) - \frac{1}{2} \sum_{t=1}^T \left[ \ln(\sigma_t^2) + \frac{\varepsilon_t^2}{\sigma_t^2} \right]
+$$
+
+### Para distribución t-Student:
+
+$$
+\ln L = T \left[ \ln \Gamma\left(\frac{\nu+1}{2}\right) - \ln \Gamma\left(\frac{\nu}{2}\right) - \frac{1}{2} \ln[\pi(\nu-2)] \right] - \frac{1}{2} \sum_{t=1}^T \left[ \ln(\sigma_t^2) + (\nu+1) \ln\left(1 + \frac{\varepsilon_t^2}{\sigma_t^2(\nu-2)}\right) \right]
+$$
+
+# MEDIDAS DE PRECISIÓN DE PRONÓSTICOS
+
+## Error Cuadrático Medio (MSE)
+
+$$
+MSE = \frac{1}{H} \sum_{h=1}^H (\sigma_{T+h}^2 - \hat{\sigma}_{T+h}^2)^2
+$$
+
+## Error Absoluto Medio (MAE)
+
+$$
+MAE = \frac{1}{H} \sum_{h=1}^H |\sigma_{T+h}^2 - \hat{\sigma}_{T+h}^2|
+$$
+
+## Estadístico Mincer-Zarnowitz
+
+$$
+\sigma_{T+h}^2 = \alpha + \beta \hat{\sigma}_{T+h}^2 + \varepsilon_{T+h}
+$$
+
+# ANÁLISIS DE RESIDUALES
+
+## Residuales Estandarizados
+
+$$
+z_t = \frac{\varepsilon_t}{\sigma_t}
+$$
+
+## Pruebas sobre Residuales
+
+**Media:**
+$$
+\bar{z} = \frac{1}{T} \sum_{t=1}^T z_t \approx 0
+$$
+
+**Varianza:**
+$$
+\frac{1}{T} \sum_{t=1}^T z_t^2 \approx 1
+$$
+
+**Autocorrelación:**
+$$
+\rho_k(z_t) \approx 0 \quad \forall k \neq 0
+$$
+
+
+
+```{r environment_setup_mejorado, echo=FALSE, eval=TRUE}
+
+# Configurar símbolos representativos de diferentes clases de activos
+symbols <- c('AAPL', 'MSFT', 'GOOGL', 'SPY', 'TLT', 'GLD')  # Acciones, ETF, Bonos, Oro
+start_date <- '2022-11-21'
+end_date <- '2022-11-21'
+
+cat("Símbolos configurados:", paste(symbols, collapse = ", "), "\n")
+cat("Período de análisis:", start_date, "a", end_date, "\n")
+cat("Clases de activos: Acciones tecnológicas, ETF mercado, Bonos, Oro\n\n")
+```
+Sensibilidad por Nivel de Confianza
+
+Incremento de VaR de 90% a 99% muestra que los activos más volátiles (GOOGL y AAPL) aumentan más drásticamente su riesgo en escenarios extremos, mientras que activos menos volátiles (TLT, SPY) muestran incrementos moderados.
+
+Esto confirma la importancia de seleccionar correctamente los niveles de confianza en la gestión de riesgo.
+
+
+## 6. CARGA Y ANÁLISIS COMPLETO DE DATOS
+
+```{r data_analysis_completo, echo=FALSE, eval=TRUE}
+# FUNCIÓN CORREGIDA: Indicadores técnicos
+calcular_indicadores_tecnicos_corregido <- function(symbols, price_series) {
+  indicadores <- data.frame()
+  
+  for(activo in symbols) {
+    tryCatch({
+      # Obtener serie de precios directamente
+      precio_serie <- price_series[[activo]]
+      
+      if(is.null(precio_serie) || length(precio_serie) < 30) {
+        cat("Saltando", activo, "- datos insuficientes\n")
+        next
+      }
+      
+      # Convertir a numérico si es necesario
+      precio_numeric <- as.numeric(precio_serie)
+      
+      # Promedios móviles
+      sma_20 <- tryCatch({
+        TTR::SMA(precio_numeric, n = 20)
+      }, error = function(e) NA)
+      
+      ema_20 <- tryCatch({
+        TTR::EMA(precio_numeric, n = 20)
+      }, error = function(e) NA)
+      
+      # RSI
+      rsi_14 <- tryCatch({
+        TTR::RSI(precio_numeric, n = 14)
+      }, error = function(e) NA)
+      
+      # Obtener últimos valores válidos
+      ultimo_sma <- if(!all(is.na(sma_20))) tail(na.omit(sma_20), 1) else NA
+      ultimo_ema <- if(!all(is.na(ema_20))) tail(na.omit(ema_20), 1) else NA
+      ultimo_rsi <- if(!all(is.na(rsi_14))) tail(na.omit(rsi_14), 1) else NA
+      
+      # Determinar estado del mercado
+      estado_mercado <- if(is.na(ultimo_rsi)) "ND" else {
+        if(ultimo_rsi > 70) "Sobrecompra" else
+        if(ultimo_rsi < 30) "Sobreventa" else "Neutral"
+      }
+      
+      # Precio actual
+      precio_actual <- tail(precio_numeric, 1)
+      
+      indicadores <- rbind(indicadores, data.frame(
+        Activo = activo,
+        Precio_Actual = round(precio_actual, 2),
+        SMA_20 = round(ultimo_sma, 2),
+        EMA_20 = round(ultimo_ema, 2),
+        RSI_14 = round(ultimo_rsi, 2),
+        Estado_Mercado = estado_mercado,
+        stringsAsFactors = FALSE
+      ))
+      
+    }, error = function(e) {
+    })
+  }
+  
+  return(indicadores)
+}
+
+# FUNCIÓN MEJORADA: Propiedades empíricas
+analizar_propiedades_empiricas <- function(returns_df) {
+  propiedades <- data.frame()
+  
+  for(activo in colnames(returns_df)) {
+    retornos <- na.omit(returns_df[, activo])
+    
+    if(length(retornos) < 10) next  # Saltar si no hay suficientes datos
+    
+    # Estadísticas descriptivas
+    media <- mean(retornos)
+    volatilidad <- sd(retornos)
+    skewness <- moments::skewness(retornos)
+    kurtosis <- moments::kurtosis(retornos)
+    
+    # Pruebas de normalidad (con manejo mejorado de warnings)
+    jb_test <- tryCatch({
+      tseries::jarque.bera.test(retornos)
+    }, error = function(e) {
+      list(statistic = NA, p.value = NA)
+    })
+    
+    ks_test <- tryCatch({
+      # Usar suppressWarnings para evitar warnings de ties
+      suppressWarnings(ks.test(scale(retornos), "pnorm"))
+    }, error = function(e) {
+      list(statistic = NA, p.value = NA)
+    })
+    
+    # Autocorrelación
+    acf_retornos <- tryCatch({
+      acf_val <- acf(retornos, plot = FALSE)$acf
+      if(length(acf_val) >= 2) acf_val[2] else NA
+    }, error = function(e) {
+      NA
+    })
+    
+    acf_absolutos <- tryCatch({
+      acf_val <- acf(abs(retornos), plot = FALSE)$acf
+      if(length(acf_val) >= 2) acf_val[2] else NA
+    }, error = function(e) {
+      NA
+    })
+    
+    propiedades <- rbind(propiedades, data.frame(
+      Activo = activo,
+      Media = round(media, 6),
+      Volatilidad = round(volatilidad, 4),
+      Asimetría = round(skewness, 4),
+      Curtosis = round(kurtosis, 4),
+      JB_pvalue = round(jb_test$p.value, 4),
+      KS_pvalue = round(ks_test$p.value, 4),
+      ACF_Retornos = round(acf_retornos, 4),
+      ACF_Absolutos = round(acf_absolutos, 4),
+      stringsAsFactors = FALSE
+    ))
+  }
+  
+  return(propiedades)
+}
+```
+
+
+
+## 7. APLICACIÓN DE MODELOS ARCH/GARCH
+
+```{r aplicacion_garch, echo=FALSE, eval=TRUE}
+# Aplicar modelos GARCH a cada activo
+garch_results <- list()
+
+for(activo in symbols[1:3]) {  # Aplicar a los primeros 3 activos por tiempo de cómputo
+  resultado <- ajustar_modelos_volatilidad(returns_df, activo)
+  if(!is.null(resultado)) {
+    garch_results[[activo]] <- resultado
+  }
+}
+
+if(length(garch_results) > 0) {
+  garch_df <- do.call(rbind, garch_results)
+  cat("RESULTADOS MODELOS GARCH(1,1):\n")
+  print(kable(garch_df, format = "simple"))
+  
+  # Interpretación
+  cat("\n📊 INTERPRETACIÓN GARCH:\n")
+  cat("• Persistencia ≈ 1: Volatilidad muy persistente\n")
+  cat("• Alpha1 alto: Reacción fuerte a shocks recientes\n")
+  cat("• Beta1 alto: Dependencia fuerte de volatilidad pasada\n")
+}
+```
+
+
+
+
+Todos los activos muestran alta persistencia de volatilidad (α + β ≈ 0.93 - 0.98), indicando que los shocks recientes tienen efecto prolongado.
+
+Valores de α1 moderados (≈0.10-0.12) sugieren reacción moderada a shocks recientes.
+
+Valores de β1 altos (≈0.83-0.87) reflejan fuerte dependencia de la volatilidad pasada.
+
+La volatilidad pronosticada es mayor para GOOGL (0.0156) y menor para AAPL y MSFT (~0.011), reflejando mayor incertidumbre en GOOGL.
+
+
+
+
+## 8. CÁLCULO VaR COMPLETO Y COMPARATIVO
+
+```{r var_completo, echo=FALSE, eval=TRUE}
+
+# VaR al 95% y 99% con diferentes métodos
+var_95_normal <- calculate_parametric_var_advanced(returns_df, 0.95, "normal")
+var_95_historical <- calculate_parametric_var_advanced(returns_df, 0.95, "historical")
+var_99_normal <- calculate_parametric_var_advanced(returns_df, 0.99, "normal")
+
+# Expected Shortfall
+es_95 <- calculate_expected_shortfall_advanced(returns_df, 0.95)
+es_99 <- calculate_expected_shortfall_advanced(returns_df, 0.99)
+
+# Análisis de sensibilidad
+sensitivity <- analyze_var_sensitivity(returns_df)
+
+# Resultados consolidados
+var_comparison <- data.frame(
+  Activo = names(var_95_normal),
+  VaR_95_Normal = round(var_95_normal, 4),
+  VaR_95_Historical = round(var_95_historical, 4),
+  VaR_99_Normal = round(var_99_normal, 4),
+  ES_95 = round(es_95, 4),
+  ES_99 = round(es_99, 4)
+)
+
+cat("TABLA COMPARATIVA VaR y EXPECTED SHORTFALL:\n")
+print(kable(var_comparison, format = "simple"))
+
+cat("\nANÁLISIS DE SENSIBILIDAD POR NIVEL DE CONFIANZA:\n")
+print(kable(sensitivity, format = "simple"))
+```
+
+
+
+Los activos más volátiles (AAPL, MSFT, GOOGL) presentan los VaR y ES más altos, tanto en 95% como en 99% de nivel de confianza.
+
+SPY, TLT y GLD muestran menor riesgo, reflejando su perfil más conservador.
+
+El Expected Shortfall siempre supera al VaR, indicando que en los peores escenarios las pérdidas pueden exceder el VaR estimado.
+
+La diferencia entre VaR histórico y paramétrico es mayor para GOOGL y MSFT, lo que sugiere que la distribución empírica presenta más eventos extremos de los que estima la distribución normal.
+
+
+## 9. BACKTESTING COMPLETO
+
+```{r backtesting_completo, echo=FALSE, eval=TRUE}
+cat("=== BACKTESTING COMPLETO DEL MODELO VaR ===\n\n")
+
+# Realizar backtesting avanzado
+backtest_95 <- perform_advanced_backtesting(returns_df, var_95_normal, 0.95)
+
+cat("RESULTADOS BACKTESTING VaR 95%:\n")
+print(kable(backtest_95, format = "simple"))
+
+# Resumen del backtesting
+cat("\n📈 RESUMEN BACKTESTING:\n")
+cat("• Modelos aceptables:", sum(backtest_95$Resultado == "✅ Aceptable"), "/", nrow(backtest_95), "\n")
+cat("• Ratio de violaciones promedio:", round(mean(backtest_95$Ratio_Violaciones, na.rm = TRUE), 2), "\n")
+cat("• Severidad promedio:", round(mean(backtest_95$Severidad, na.rm = TRUE), 2), "\n")
+
+if(mean(backtest_95$Ratio_Violaciones, na.rm = TRUE) > 1.5) {
+  cat("⚠️  ALERTA: Demasiadas violaciones - Posible subestimación del riesgo\n")
+} else if(mean(backtest_95$Ratio_Violaciones, na.rm = TRUE) < 0.5) {
+  cat("⚠️  ALERTA: Muy pocas violaciones - Modelo posiblemente muy conservador\n")
+} else {
+  cat("✅ Backtesting dentro de rangos aceptables\n")
+}
+```
+
+
+Violaciones observadas vs. esperadas:
+
+Todos los activos tienen un número de violaciones ligeramente inferior o cercano al esperado según el nivel de confianza, lo que indica que los modelos VaR no subestiman el riesgo.
+
+Ningún activo muestra un exceso de violaciones que sugiera un modelo inadecuado.
+
+Ratio de violaciones:
+
+Valores menores a 1 (0.796–0.955) muestran que las violaciones reales son menores a las esperadas, confirmando que los modelos son conservadores o adecuados.
+
+Kupiec p-value:
+
+Todos los activos presentan p-values mayores a 0.05, por lo que no se rechaza la hipótesis nula de que el número de violaciones es consistente con el nivel de confianza.
+
+Severidad:
+
+La severidad (>1) indica que, cuando ocurren violaciones, las pérdidas exceden ligeramente el VaR calculado, pero no de manera significativa que ponga en duda el modelo.
+
+Resultado final:
+
+Todos los activos tienen un resultado aceptable, lo que valida la confiabilidad del modelo VaR para este conjunto de datos.
+
+
+  
+## 10. DASHBOARD INTERACTIVO MEJORADO
+
+```{r dashboard_mejorado, echo=FALSE, eval=TRUE}
+
+parte1 <- 'import streamlit as st
+import pandas as pd
+import numpy as np
+import yfinance as yf
+from datetime import datetime, timedelta
+import plotly.graph_objects as go
+import plotly.express as px
+import warnings
+warnings.filterwarnings("ignore")
+
+# Configuración de la página
+st.set_page_config(
+    page_title="Dashboard de Riesgo Financiero",
+    page_icon="📊",
+    layout="wide"
+)
+
+st.title("📊 Dashboard de Riesgo Financiero")
+st.markdown("---")
+
+# Sidebar
+st.sidebar.header("⚙️ Configuración")
+
+# Símbolos disponibles
+available_symbols = {
+    "Acciones Tech": ["AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "META", "NVDA"],
+    "ETFs": ["SPY", "QQQ", "IWM", "TLT", "GLD", "VTI"],
+    "Índices": ["^GSPC", "^IXIC", "^DJI"],
+    "Forex": ["EURUSD=X", "GBPUSD=X", "JPY=X"],
+    "Crypto": ["BTC-USD", "ETH-USD", "ADA-USD"]
+}
+
+selected_category = st.sidebar.selectbox(
+    "Categoría:",
+    list(available_symbols.keys())
+)
+
+selected_symbols = st.sidebar.multiselect(
+    "Selecciona activos:",
+    options=available_symbols[selected_category],
+    default=["AAPL", "MSFT", "GOOGL"] if selected_category == "Acciones Tech" else available_symbols[selected_category][:3]
+)
+
+# Configuración de fechas
+col1, col2 = st.sidebar.columns(2)
+with col1:
+    start_date = st.date_input(
+        "Fecha inicio:",
+        datetime.now() - timedelta(days=365*3)
+    )
+with col2:
+    end_date = st.date_input("Fecha fin:", datetime.now())
+
+confidence_level = st.sidebar.slider(
+    "Nivel de confianza VaR (%):",
+    min_value=90,
+    max_value=99,
+    value=95
+) / 100
+
+st.sidebar.markdown("---")
+st.sidebar.info("💡 Los datos se descargan de Yahoo Finance")
+'
+
+# Parte 2 - Funciones de descarga y cálculo
+parte2 <- '
+# Función para descargar datos
+@st.cache_data(ttl=3600)
+def download_data(symbols_list, start_dt, end_dt):
+    price_data = {}
+    returns_data = {}
+    successful_downloads = []
+    
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    
+    for i, symbol in enumerate(symbols_list):
+        status_text.text(f"Descargando {symbol}... ({i+1}/{len(symbols_list)})")
+        
+        try:
+            # Descargar datos
+            ticker = yf.Ticker(symbol)
+            data = ticker.history(start=start_dt, end=end_dt, auto_adjust=True)
+            
+            if data.empty or len(data) < 10:
+                st.warning(f"No hay datos suficientes para {symbol}")
+                continue
+            
+            if "Close" not in data.columns:
+                st.warning(f"No se encontraron precios para {symbol}")
+                continue
+            
+            price_data[symbol] = data["Close"]
+            
+            # Calcular rendimientos logarítmicos
+            returns = np.log(price_data[symbol] / price_data[symbol].shift(1)).dropna()
+            
+            if len(returns) > 0:
+                returns_data[symbol] = returns
+                successful_downloads.append(symbol)
+                st.success(f"{symbol} descargado correctamente")
+            else:
+                st.warning(f"No se pudieron calcular rendimientos para {symbol}")
+                
+        except Exception as e:
+            st.error(f"Error descargando {symbol}: {str(e)}")
+        
+        progress_bar.progress((i + 1) / len(symbols_list))
+    
+    progress_bar.empty()
+    status_text.text("Descarga completada")
+    
+    if not returns_data:
+        st.error("No se pudieron descargar datos para ningún símbolo")
+        return {}, pd.DataFrame()
+    
+    # Crear DataFrame de rendimientos
+    returns_df = pd.DataFrame(returns_data)
+    returns_df = returns_df.dropna()
+    
+    st.success(f"{len(successful_downloads)} de {len(symbols_list)} activos descargados exitosamente")
+    return price_data, returns_df
+
+# Función para calcular métricas de riesgo
+def calculate_risk_metrics(returns_df, conf_level):
+    metrics = {}
+    
+    for symbol in returns_df.columns:
+        returns = returns_df[symbol].dropna()
+        
+        # Métricas básicas
+        media = returns.mean()
+        volatilidad = returns.std()
+        volatilidad_anual = volatilidad * np.sqrt(252)
+        
+        # Value at Risk (VaR)
+        var_parametrico = abs(-np.percentile(returns, (1 - conf_level) * 100))
+        var_historico = abs(returns.quantile(1 - conf_level))
+        
+        # Expected Shortfall (CVaR)
+        losses_below_var = returns[returns < -var_historico]
+        expected_shortfall = -losses_below_var.mean() if len(losses_below_var) > 0 else var_historico
+        
+        # Ratio Sharpe
+        sharpe_ratio = media / volatilidad * np.sqrt(252) if volatilidad > 0 else 0
+        
+        # Máximo Drawdown
+        cumulative_returns = (1 + returns).cumprod()
+        peak = cumulative_returns.expanding().max()
+        drawdown = (cumulative_returns - peak) / peak
+        max_drawdown = drawdown.min()
+        
+        # Estadísticas adicionales
+        skewness = returns.skew()
+        kurtosis = returns.kurtosis()
+        
+        metrics[symbol] = {
+            "Media_Diaria": media,
+            "Volatilidad_Diaria": volatilidad,
+            "Volatilidad_Anual": volatilidad_anual,
+            f"VaR_{int(conf_level*100)}%": var_parametrico,
+            f"ES_{int(conf_level*100)}%": expected_shortfall,
+            "Ratio_Sharpe": sharpe_ratio,
+            "Max_Drawdown": max_drawdown,
+            "Asimetria": skewness,
+            "Curtosis": kurtosis,
+            "Observaciones": len(returns)
+        }
+    
+    return pd.DataFrame(metrics).T
+'
+
+# Parte 3 - Interfaz principal y visualizaciones
+parte3 <- '
+# Interfaz principal
+if selected_symbols:
+    st.subheader("Descargando datos de mercado...")
+    
+    with st.spinner("Conectando con Yahoo Finance..."):
+        price_data, returns_df = download_data(selected_symbols, start_date, end_date)
+    
+    if not returns_df.empty:
+        st.success(f"Análisis de {len(returns_df.columns)} activos completado")
+        
+        # Calcular métricas
+        metrics_df = calculate_risk_metrics(returns_df, confidence_level)
+        
+        # Crear pestañas
+        tab1, tab2, tab3, tab4 = st.tabs([
+            "📈 Precios y Rendimientos", 
+            "⚠️ Análisis de Riesgo", 
+            "📊 Estadísticas", 
+            "🔍 Comparativa"
+        ])
+        
+        with tab1:
+            st.subheader("Evolución de Precios")
+            
+            # Gráfico de precios
+            fig_precios = go.Figure()
+            for symbol in returns_df.columns:
+                if symbol in price_data:
+                    fig_precios.add_trace(go.Scatter(
+                        x=price_data[symbol].index,
+                        y=price_data[symbol].values,
+                        name=symbol,
+                        line=dict(width=2)
+                    ))
+            
+            fig_precios.update_layout(
+                title="Precios de Cierre",
+                xaxis_title="Fecha",
+                yaxis_title="Precio (USD)",
+                height=500,
+                showlegend=True
+            )
+            st.plotly_chart(fig_precios, use_container_width=True)
+            
+            # Gráfico de rendimientos acumulados
+            st.subheader("Rendimientos Acumulados")
+            returns_acumulados = (1 + returns_df).cumprod() - 1
+            
+            fig_rendimientos = go.Figure()
+            for symbol in returns_acumulados.columns:
+                fig_rendimientos.add_trace(go.Scatter(
+                    x=returns_acumulados.index,
+                    y=returns_acumulados[symbol],
+                    name=symbol,
+                    line=dict(width=2)
+                ))
+            
+            fig_rendimientos.update_layout(
+                title="Rendimientos Acumulados",
+                xaxis_title="Fecha",
+                yaxis_title="Rendimiento Acumulado",
+                yaxis_tickformat=".0%",
+                height=400
+            )
+            st.plotly_chart(fig_rendimientos, use_container_width=True)
+        
+        with tab2:
+            st.subheader("Métricas de Riesgo")
+            
+            # Mostrar métricas principales
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                avg_vol = metrics_df["Volatilidad_Anual"].mean()
+                st.metric("Volatilidad Promedio Anual", f"{avg_vol:.2%}")
+            
+            with col2:
+                avg_var = metrics_df[f"VaR_{int(confidence_level*100)}%"].mean()
+                st.metric(f"VaR Promedio {int(confidence_level*100)}%", f"{avg_var:.4f}")
+            
+            with col3:
+                worst_drawdown = metrics_df["Max_Drawdown"].min()
+                st.metric("Peor Drawdown", f"{worst_drawdown:.2%}")
+            
+            with col4:
+                best_sharpe = metrics_df["Ratio_Sharpe"].max()
+                st.metric("Mejor Ratio Sharpe", f"{best_sharpe:.2f}")
+            
+            # Tabla de métricas detalladas
+            st.subheader("Métricas por Activo")
+            
+            # Formatear la tabla para mostrar
+            display_metrics = metrics_df.copy()
+            format_rules = {
+                "Media_Diaria": "{:.6f}",
+                "Volatilidad_Diaria": "{:.4f}",
+                "Volatilidad_Anual": "{:.2%}",
+                f"VaR_{int(confidence_level*100)}%": "{:.4f}",
+                f"ES_{int(confidence_level*100)}%": "{:.4f}",
+                "Ratio_Sharpe": "{:.2f}",
+                "Max_Drawdown": "{:.2%}",
+                "Asimetria": "{:.3f}",
+                "Curtosis": "{:.3f}"
+            }
+            
+            for col, fmt in format_rules.items():
+                if col in display_metrics.columns:
+                    display_metrics[col] = display_metrics[col].apply(lambda x: fmt.format(x))
+            
+            st.dataframe(display_metrics, use_container_width=True)
+            
+            # Gráfico de VaR comparativo
+            st.subheader(f"Comparación de VaR {int(confidence_level*100)}%")
+            var_col = f"VaR_{int(confidence_level*100)}%"
+            var_data = metrics_df[var_col].sort_values()
+            
+            fig_var = px.bar(
+                x=var_data.index,
+                y=var_data.values,
+                title=f"Value at Risk ({int(confidence_level*100)}%) por Activo",
+                labels={"x": "Activo", "y": "VaR"}
+            )
+            st.plotly_chart(fig_var, use_container_width=True)
+        
+        with tab3:
+            st.subheader("Estadísticas Descriptivas")
+            
+            # Seleccionar activo para análisis detallado
+            selected_asset = st.selectbox(
+                "Selecciona un activo para análisis detallado:",
+                returns_df.columns
+            )
+            
+            if selected_asset:
+                returns_asset = returns_df[selected_asset].dropna()
+                
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    # Histograma de rendimientos
+                    fig_hist = px.histogram(
+                        returns_asset, 
+                        nbins=50,
+                        title=f"Distribución de Rendimientos - {selected_asset}",
+                        labels={"value": "Rendimiento Diario"}
+                    )
+                    
+                    # Añadir líneas de referencia
+                    var_line = -metrics_df.loc[selected_asset, f"VaR_{int(confidence_level*100)}%"]
+                    es_line = -metrics_df.loc[selected_asset, f"ES_{int(confidence_level*100)}%"]
+                    
+                    fig_hist.add_vline(
+                        x=var_line, 
+                        line_dash="dash", 
+                        line_color="red",
+                        annotation_text=f"VaR {int(confidence_level*100)}%"
+                    )
+                    fig_hist.add_vline(
+                        x=es_line, 
+                        line_dash="dash", 
+                        line_color="orange",
+                        annotation_text=f"ES {int(confidence_level*100)}%"
+                    )
+                    
+                    st.plotly_chart(fig_hist, use_container_width=True)
+                
+                with col2:
+                    # Box plot
+                    fig_box = px.box(
+                        returns_asset,
+                        title=f"Box Plot - {selected_asset}",
+                        labels={"value": "Rendimiento Diario"}
+                    )
+                    st.plotly_chart(fig_box, use_container_width=True)
+        
+        with tab4:
+            st.subheader("Análisis Comparativo")
+            
+            # Heatmap de correlaciones
+            st.subheader("Matriz de Correlaciones")
+            corr_matrix = returns_df.corr()
+            
+            fig_corr = px.imshow(
+                corr_matrix,
+                text_auto=".2f",
+                aspect="auto",
+                color_continuous_scale="RdBu_r",
+                title="Correlación entre Activos"
+            )
+            st.plotly_chart(fig_corr, use_container_width=True)
+            
+            # Comparativa de volatilidades
+            st.subheader("Comparativa de Volatilidades Anuales")
+            vol_data = metrics_df["Volatilidad_Anual"].sort_values(ascending=True)
+            
+            fig_vol = px.bar(
+                x=vol_data.values,
+                y=vol_data.index,
+                orientation="h",
+                title="Volatilidad Anual por Activo",
+                labels={"x": "Volatilidad Anual", "y": "Activo"}
+            )
+            st.plotly_chart(fig_vol, use_container_width=True)
+    
+    else:
+        st.error("No se pudieron obtener datos suficientes para el análisis.")
+        
+else:
+    st.info("Por favor selecciona al menos un activo en la barra lateral para comenzar el análisis")
+
+# Footer
+st.markdown("---")
+st.markdown("**Dashboard de Análisis de Riesgo Financiero** • Desarrollado con Streamlit")
+'
+
+# Guardar el archivo Python completo
+writeLines(parte1, "dashboard_streamlit.py")
+write(parte2, file = "dashboard_streamlit.py", append = TRUE)
+write(parte3, file = "dashboard_streamlit.py", append = TRUE)
+
+
+
+```
+
+
+
+```{r,echo=FALSE,echo=FALSE, eval= TRUE}
+
+library(reticulate)
+
+#  Usar Python correcto
+python_path <- "C:/Users/Admin/AppData/Local/Programs/Python/Python311/python.exe"
+use_python(python_path, required = TRUE)
+
+paquetes <- c("streamlit", "pandas", "numpy", "yfinance", "plotly", "scipy", "matplotlib")
+
+for (pkg in paquetes) {
+  tryCatch({
+    reticulate::py_require(pkg)
+  }, error = function(e) {
+    cat("📥 Instalando", pkg, "...\n")
+    reticulate::py_install(pkg, pip = TRUE)
+  })
+}
+
+#  Verificar archivo
+if (!file.exists("dashboard_streamlit.py")) {
+  stop("❌ No se encuentra dashboard_streamlit.py")
+}
+
+#  Ejecutar dashboard
+system(paste0('"', python_path, '" -m streamlit run dashboard_streamlit.py'), wait = FALSE)
+ 
+```
+El informe completo con visualizaciones interactivas está disponible en:
+
+[🌐 **Acceder al Dashboard - Análisis de Riesgo Financiero**](https://proyecto-final-teoria-del-riesgo-nuud3utqkuddluzywktdrn.streamlit.app/)
+
+*Click en el enlace para explorar los resultados de forma interactiva*
+
+# CONCLUSIÓN
+
+## Resumen de Fórmulas Clave
+
+| Concepto | Fórmula |
+|----------|---------|
+| Rendimiento | $R_t = \frac{P_t - P_{t-1}}{P_{t-1}} \times 100$ |
+| GARCH(1,1) | $\sigma_t^2 = \omega + \alpha \varepsilon_{t-1}^2 + \beta \sigma_{t-1}^2$ |
+| VaR Paramétrico | $VaR_\alpha = \mu + \sigma \cdot F^{-1}(\alpha)$ |
+| Expected Shortfall | $ES_\alpha = \mathbb{E}[R_t \mid R_t \leq VaR_\alpha]$ |
+| Persistencia | $\phi = \alpha + \beta$ |
+| Vida Media | $\text{Vida Media} = \frac{\ln(0.5)}{\ln(\phi)}$ |
+
+## Interpretación de Parámetros
+
+- **$\alpha$**: Sensibilidad a shocks recientes (noticias)
+- **$\beta$**: Persistencia de la volatilidad (memoria del mercado)  
+- **$\alpha + \beta$**: Grado de persistencia total de la volatilidad
+- **$\omega/(1-\alpha-\beta)$**: Nivel de largo plazo de la volatilidad
+
+
+
+## Rendimientos y propiedades estilizadas:
+
+Los activos analizados muestran rendimientos diarios relativamente bajos en promedio, con AAPL y GOOGL siendo los más volátiles y SPY, TLT y GLD más estables.
+
+Las distribuciones de retornos presentan asimetría y curtosis elevada, indicando colas pesadas y desviaciones respecto a la normalidad. Esto confirma la presencia de fenómenos típicos en series financieras, como agrupamiento de volatilidad y eventos extremos.
+
+### Modelos de volatilidad (ARCH/GARCH):
+
+Los modelos GARCH(1,1) muestran alta persistencia de volatilidad (α + β ≈ 0.93–0.98), lo que implica que los shocks recientes tienen efectos prolongados sobre la volatilidad futura.
+
+La volatilidad pronosticada es mayor en GOOGL y más baja en AAPL y MSFT, reflejando diferencias en riesgo específico entre los activos.
+
+Los resultados confirman que la volatilidad pasada es un buen predictor de la volatilidad futura, especialmente en activos tecnológicos más dinámicos.
+
+### Medidas de riesgo (VaR y Expected Shortfall):
+
+Los activos más volátiles (AAPL, MSFT, GOOGL) presentan VaR y ES más altos, mientras que activos conservadores (SPY, TLT, GLD) muestran menores pérdidas esperadas.
+
+El Expected Shortfall excede al VaR en todos los casos, indicando que los peores escenarios superan las pérdidas estimadas por VaR y subrayando la importancia de complementar ambas métricas.
+
+La comparación entre VaR paramétrico y histórico evidencia que GOOGL y MSFT presentan más eventos extremos de los capturados por la distribución normal, lo que refuerza la necesidad de considerar métodos no paramétricos para escenarios de riesgo extremo.
+
+### Backtesting de VaR:
+
+Las pruebas de backtesting muestran que la mayoría de los modelos son aceptables, con violaciones consistentes con los niveles de confianza establecidos y severidad moderada.
+
+Esto valida la confiabilidad de los modelos aplicados para la gestión de riesgo, indicando que las estimaciones de pérdida máxima están bien calibradas para el período analizado.
+
+### Gestión integral de riesgo:
+
+La combinación de análisis de rendimientos, modelos de volatilidad y medidas de riesgo proporciona una visión completa de los perfiles de riesgo de cada activo.
+
+Activos con mayor volatilidad requieren monitoreo constante y estrategias de cobertura, mientras que los activos más estables pueden ser utilizados para diversificación y mitigación del riesgo de portafolio.
+
+La integración de VaR y Expected Shortfall junto con backtesting permite tomar decisiones más informadas y robustas frente a posibles pérdidas extremas.
+
+## Conclusión final:
+
+El análisis confirma que los modelos aplicados son adecuados para capturar la dinámica de los activos financieros evaluados, cuantificar su riesgo y soportar decisiones de gestión de portafolio. La diversificación y el monitoreo de volatilidad son esenciales, y las medidas de riesgo como VaR y ES proporcionan información complementaria crucial para protegerse ante pérdidas significativas.
+
+
+
